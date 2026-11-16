@@ -1,0 +1,147 @@
+name: Produce
+
+# Engine only. Scripts, voices and character art come from private repos at run time,
+# nothing readable is logged, and the finished video is encrypted before upload.
+#
+# Needs:
+#   secret   PRIVATE_READ_TOKEN  fine-grained token, read-only Contents on the private content repos
+#   variable CONTENT_REPO        e.g. scarletviz/vision-quest   (scripts in bank/<id>/script.json, voices.json)
+#   variable CAST_REPO           e.g. scarletviz/character-library (art/svg-2d-rig)
+#   variable AGE_RECIPIENT       public age key; only its private half (kept offline) can decrypt the output
+
+on:
+  workflow_dispatch:
+    inputs:
+      episodes:
+        description: "Episode ids from bank/, comma-separated (e.g. 2026-11-30-short,2026-12-01-short)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - id: ids
+        env:
+          EPISODES: ${{ inputs.episodes }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          ids = [e.strip() for e in os.environ["EPISODES"].split(",") if e.strip()]
+          bad = [e for e in ids if not re.fullmatch(r"[A-Za-z0-9._-]+", e)]
+          if bad:
+              raise SystemExit("invalid episode ids")
+          print("ids=" + json.dumps(ids))
+          PY
+
+  produce:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.ids) }}
+    env:
+      ID: ${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch private content (not logged)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CONTENT_REPO }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: content
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /bank/${{ matrix.id }}/
+            /voices.json
+
+      - name: Fetch private character art (not logged)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.CAST_REPO }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: cast
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /art/svg-2d-rig/
+
+      - name: Arrange workspace
+        run: |
+          test -f "content/bank/$ID/script.json" || { echo "episode not found"; exit 1; }
+          python3 -c "import json,os,sys; k=json.load(open(f'content/bank/{os.environ[\"ID\"]}/script.json')).get('length',''); sys.exit('long videos are not supported yet' if '16:9' in k else 0)"
+          mkdir -p "episodes/$ID" characters
+          cp "content/bank/$ID/script.json" "episodes/$ID/"
+          cp content/voices.json .
+          cp -r cast/art/svg-2d-rig/svg characters/svg
+          cp cast/art/svg-2d-rig/rig.js characters/
+          rm -rf content cast
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng ffmpeg age >/dev/null
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -r requirements.txt
+          curl -sSL -o /tmp/rhubarb.zip https://github.com/DanielSWolf/rhubarb-lip-sync/releases/download/v1.14.0/Rhubarb-Lip-Sync-1.14.0-Linux.zip
+          unzip -q /tmp/rhubarb.zip -d /opt/rhubarb
+          echo "RHUBARB=$(find /opt/rhubarb -name rhubarb -type f)" >> "$GITHUB_ENV"
+
+      - name: Cache models
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/hyperframes
+          key: factory-models-hf-0.9.5
+
+      # Steps below send their output to /dev/null: the scripts print line text, and this repo's logs are public.
+      - name: Voices (Kokoro)
+        run: python scripts/tts.py "episodes/$ID" > /dev/null
+
+      - name: Word timings (Whisper)
+        run: npx --yes hyperframes@0.9.5 transcribe "out/$ID/dialogue.wav" --dir "out/$ID" --engine whisper --model small.en --language en > /dev/null 2>&1
+
+      - name: Mouth shapes (Rhubarb)
+        run: python scripts/lipsync.py "out/$ID" > /dev/null
+
+      - name: Compose
+        run: node scripts/compose.mjs "$ID" > /dev/null
+
+      - name: Render
+        run: |
+          npx --yes hyperframes@0.9.5 browser ensure > /dev/null 2>&1
+          mkdir -p final
+          (cd "videos/$ID" && npx --yes hyperframes@0.9.5 render --quiet -o "$GITHUB_WORKSPACE/final/$ID.mp4") > /dev/null 2>&1 || { echo "render failed"; exit 1; }
+          test -s "final/$ID.mp4"
+
+      - name: Encrypt
+        env:
+          AGE_RECIPIENT: ${{ vars.AGE_RECIPIENT }}
+        run: |
+          cp "episodes/$ID/script.json" "final/$ID.script.json"
+          tar -C final -cf "/tmp/$ID.tar" .
+          age -r "$AGE_RECIPIENT" -o "$ID.tar.age" "/tmp/$ID.tar"
+          rm -rf final "/tmp/$ID.tar" out videos episodes characters voices.json
+          ls -la "$ID.tar.age"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.id }}
+          path: ${{ matrix.id }}.tar.age
+          retention-days: 7

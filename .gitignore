@@ -1,0 +1,11 @@
+out/
+videos/
+episodes/
+characters/
+content/
+cast/
+final/
+voices.json
+__pycache__/
+.DS_Store
+node_modules/
