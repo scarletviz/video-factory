@@ -24,6 +24,7 @@ const CAST = {
   james:  { name: "James",  role: "Games & gadgets",       accent: "#3DD6A3" },
   john:   { name: "John",   role: "The skeptic",           accent: "#9FB4D8" },
   rachel: { name: "Rachel", role: "Trending & viral",      accent: "#FFC93C" },
+  vera:   { name: "Vera",   role: "History & lore",        accent: "#E2B857" },
 };
 const KIKO_LED = { classic: "#6CF5C8", sakura: "#FF8AD8", night: "#4DF3FF", onair: "#FFD23F" };
 
@@ -143,7 +144,9 @@ kikoLines.forEach((l, i) => {
 
 /* ---------- Files ---------- */
 
-const svgFor = (who) => readFileSync(join(ROOT, "characters/svg", who === "kiko" ? `kiko-${skin}.svg` : `${who}.svg`), "utf8")
+// script.looks picks an outfit per character, e.g. { "selena": "festive" } -> characters/svg/selena-festive.svg
+const looks = script.looks || {};
+const svgFor = (who) => readFileSync(join(ROOT, "characters/svg", who === "kiko" ? `kiko-${skin}.svg` : looks[who] ? `${who}-${looks[who]}.svg` : `${who}.svg`), "utf8")
   .replace(/<svg id="[^"]+"/, `<svg id="svg-${who}" width="100%" height="100%"`);
 
 const stage = `<template>
