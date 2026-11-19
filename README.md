@@ -1,6 +1,6 @@
 # video-factory
 
-A public engine that turns a script into a vertical cartoon Short: Kokoro voices, Whisper word timings, Rhubarb lip sync, and a HyperFrames render.
+A public engine that turns a script into a vertical cartoon Short: Kokoro voices, Whisper word timings, Rhubarb lip sync, music ducked under the voice with whooshes on speaker changes, and a HyperFrames render.
 
 This repo holds **no content**. Scripts, voices and character art live in private repos and are fetched at run time with a read-only token. The workflow never prints script text, and the finished video is **encrypted with [age](https://age-encryption.org)** before it is uploaded, so the public artifacts are unreadable without the private key, which never leaves the owner's machine.
 
@@ -13,7 +13,7 @@ Actions → **Produce** → Run workflow → episode ids, comma-separated (for e
 ```
 gh run download <run-id> --repo scarletviz/video-factory --dir dl
 age -d -i ~/.config/vision-quest/age-key.txt -o ep.tar dl/<id>/<id>.tar.age
-tar -xf ep.tar     # <id>.mp4 and <id>.script.json
+tar -xf ep.tar     # <id>.mp4, <id>.script.json and <id>.credits.txt (paste into the description)
 ```
 
 ## Setup (owner)
@@ -23,6 +23,7 @@ tar -xf ep.tar     # <id>.mp4 and <id>.script.json
 | `PRIVATE_READ_TOKEN` | secret | Fine-grained token: read-only **Contents** on the content and cast repos |
 | `CONTENT_REPO` | variable | Private repo with `bank/<id>/script.json` and `voices.json` |
 | `CAST_REPO` | variable | Private repo with `art/svg-2d-rig` |
+| `AUDIO_REPO` | variable | Optional: repo with `catalog/catalog.json` and `catalog/sfx.json` for music and whooshes |
 | `AGE_RECIPIENT` | variable | Public age key (the private half stays offline) |
 
 The workflow only runs on manual dispatch, so pull requests from forks can never reach the secrets.

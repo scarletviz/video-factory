@@ -44,6 +44,8 @@ const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, 
 // Each line owns the screen from its start until the next line starts.
 const slots = lines.map((l, i) => ({ ...l, from: i === 0 ? 0 : l.start, to: i + 1 < lines.length ? lines[i + 1].start : total }));
 const speakers = [...new Set(lines.map((l) => l.speaker))];
+// Two speakers (every daily Short): both stay on screen, the one talking is big on the left.
+const duo = speakers.length === 2;
 
 /* ---------- Captions: script words, Whisper pacing, Kokoro line times ----------
    Whisper's absolute times drift by up to a second on synthetic speech, but its pacing inside a
@@ -150,7 +152,7 @@ const stage = `<template>
     .plate { position: absolute; left: 0; top: 300px; width: ${W}px; text-align: center; }
     .plate-name { font: 900 120px "Inter", sans-serif; color: #fff; line-height: 1; }
     .plate-role { font: 400 42px "Inter", sans-serif; color: rgba(255,255,255,.72); margin-top: 18px; }
-    .char { position: absolute; left: 240px; top: 450px; width: 600px; height: 720px; opacity: 0; }
+    .char { position: absolute; left: ${duo ? 0 : 240}px; top: ${duo ? 0 : 450}px; width: 600px; height: 720px; opacity: 0; }
   </style>
   <div id="root" data-composition-id="stage" data-width="${W}" data-height="${H}">
     <div id="bg" class="clip" data-start="0" data-duration="${total}" data-track-index="1">
@@ -175,9 +177,34 @@ ${readFileSync(join(ROOT, "characters/rig.js"), "utf8").replace(/<\/script/gi, "
       const LIPS = ${JSON.stringify(lipsync.speakers)};
       const EXPR = ${JSON.stringify(expressions)};
       const TOTAL = ${total};
+      const DUO = ${duo};
       const tl = gsap.timeline({ paused: true });
 
-      SLOTS.forEach((s, i) => {
+      // Two-shot: speaker at MAIN, listener at SIDE; they trade places when the speaker changes.
+      const MAIN = { x: 60, y: 450, scale: 1, opacity: 1, zIndex: 3 };
+      const SIDE = { x: 650, y: 732, scale: 0.6, opacity: 0.82, zIndex: 2 };
+      if (DUO) {
+        const cast = Object.keys(ACCENT);
+        cast.forEach((who) => tl.set(root.querySelector("#char-" + who), { transformOrigin: "0% 0%", ...(who === SLOTS[0].speaker ? MAIN : SIDE) }, 0));
+        SLOTS.forEach((s, i) => {
+          const plate = root.querySelector("#plate-" + (i + 1) + " .plate-inner");
+          tl.to(root.querySelector("#bg-glow"), { "--accent": ACCENT[s.speaker], duration: i ? 0.4 : 0.01, ease: "sine.inOut" }, s.from);
+          if (i === 0) tl.set(plate, { opacity: 1, y: 0 }, 0);
+          else {
+            tl.set(plate, { opacity: 0, y: 30 }, s.from);
+            tl.to(plate, { opacity: 1, y: 0, duration: 0.3, ease: "power3.out" }, s.from + 0.08);
+          }
+          if (i < SLOTS.length - 1) tl.to(plate, { opacity: 0, duration: 0.12, ease: "power2.in" }, s.to - 0.12);
+          if (i > 0 && SLOTS[i - 1].speaker !== s.speaker) {
+            const now = root.querySelector("#char-" + s.speaker), before = root.querySelector("#char-" + SLOTS[i - 1].speaker);
+            tl.set(now, { zIndex: 3 }, s.from).set(before, { zIndex: 2 }, s.from);
+            tl.to(now, { x: MAIN.x, y: MAIN.y, scale: MAIN.scale, opacity: 1, duration: 0.45, ease: "power3.inOut" }, s.from - 0.1);
+            tl.to(before, { x: SIDE.x, y: SIDE.y, scale: SIDE.scale, opacity: SIDE.opacity, duration: 0.45, ease: "power3.inOut" }, s.from - 0.1);
+          }
+        });
+      }
+
+      if (!DUO) SLOTS.forEach((s, i) => {
         const el = root.querySelector("#char-" + s.speaker);
         const plate = root.querySelector("#plate-" + (i + 1) + " .plate-inner");
         tl.to(root.querySelector("#bg-glow"), { "--accent": ACCENT[s.speaker], duration: i ? 0.4 : 0.01, ease: "sine.inOut" }, s.from);
@@ -269,7 +296,7 @@ const index = `<!doctype html>
         data-start="0" data-duration="${total}" data-track-index="1" data-track-kind="graphics" data-width="${W}" data-height="${H}"></div>
       <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html"
         data-start="0" data-duration="${total}" data-track-index="2" data-track-kind="captions" data-width="${W}" data-height="${H}" style="z-index: 2"></div>
-      <audio id="voice" src="assets/dialogue.wav" data-start="0" data-duration="${r2(timeline.duration)}" data-track-index="3" data-volume="1"></audio>
+      <audio id="voice" src="assets/dialogue.wav" data-start="0" data-duration="${existsSync(join(ROOT, `out/${ep}/mix.wav`)) ? total : r2(timeline.duration)}" data-track-index="3" data-volume="1"></audio>
     </div>
     <script>
       window.__timelines["main"] = gsap.timeline({ paused: true });
@@ -284,7 +311,9 @@ mkdirSync(join(dir, "assets"), { recursive: true });
 writeFileSync(join(dir, "index.html"), index);
 writeFileSync(join(dir, "compositions/stage.html"), stage);
 writeFileSync(join(dir, "compositions/captions.html"), captions);
-copyFileSync(join(ROOT, `out/${ep}/dialogue.wav`), join(dir, "assets/dialogue.wav"));
+// Prefer the finished soundtrack (voice + music + sound effects) from scripts/soundtrack.py.
+const mixed = existsSync(join(ROOT, `out/${ep}/mix.wav`));
+copyFileSync(join(ROOT, `out/${ep}/${mixed ? "mix" : "dialogue"}.wav`), join(dir, "assets/dialogue.wav"));
 if (!existsSync(join(dir, "package.json"))) {
   const run = (cmd) => `npx --yes hyperframes@${HF_VERSION} ${cmd}`;
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: ep, private: true, type: "module",

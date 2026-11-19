@@ -7,6 +7,7 @@ name: Produce
 #   secret   PRIVATE_READ_TOKEN  fine-grained token, read-only Contents on the private content repos
 #   variable CONTENT_REPO        e.g. scarletviz/vision-quest   (scripts in bank/<id>/script.json, voices.json)
 #   variable CAST_REPO           e.g. scarletviz/character-library (art/svg-2d-rig)
+#   variable AUDIO_REPO          e.g. scarletviz/audio-library (catalog/*.json; optional: no music without it)
 #   variable AGE_RECIPIENT       public age key; only its private half (kept offline) can decrypt the output
 
 on:
@@ -49,6 +50,8 @@ jobs:
         id: ${{ fromJSON(needs.plan.outputs.ids) }}
     env:
       ID: ${{ matrix.id }}
+      TTS_SPEED_SCALE: "1.08"   # slightly brisker delivery keeps Shorts under 60 s
+      TTS_GAP: "0.15"
     steps:
       - uses: actions/checkout@v7
 
@@ -73,6 +76,19 @@ jobs:
           sparse-checkout: |
             /art/svg-2d-rig/
 
+      - name: Fetch music catalogue (optional)
+        id: audio
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.AUDIO_REPO }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          path: audio
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /catalog/catalog.json
+            /catalog/sfx.json
+
       - name: Arrange workspace
         run: |
           test -f "content/bank/$ID/script.json" || { echo "episode not found"; exit 1; }
@@ -82,7 +98,8 @@ jobs:
           cp content/voices.json .
           cp -r cast/art/svg-2d-rig/svg characters/svg
           cp cast/art/svg-2d-rig/rig.js characters/
-          rm -rf content cast
+          mkdir -p catalog && cp audio/catalog/*.json catalog/ 2>/dev/null || echo "no music catalogue"
+          rm -rf content cast audio
 
       - uses: actions/setup-python@v7
         with:
@@ -120,6 +137,9 @@ jobs:
       - name: Mouth shapes (Rhubarb)
         run: python scripts/lipsync.py "out/$ID" > /dev/null
 
+      - name: Soundtrack (music + whooshes)
+        run: python scripts/soundtrack.py "$ID" catalog > /dev/null
+
       - name: Compose
         run: node scripts/compose.mjs "$ID" > /dev/null
 
@@ -135,9 +155,10 @@ jobs:
           AGE_RECIPIENT: ${{ vars.AGE_RECIPIENT }}
         run: |
           cp "episodes/$ID/script.json" "final/$ID.script.json"
+          cp "out/$ID/credits.txt" "final/$ID.credits.txt" 2>/dev/null || true
           tar -C final -cf "/tmp/$ID.tar" .
           age -r "$AGE_RECIPIENT" -o "$ID.tar.age" "/tmp/$ID.tar"
-          rm -rf final "/tmp/$ID.tar" out videos episodes characters voices.json
+          rm -rf final "/tmp/$ID.tar" out videos episodes characters catalog voices.json
           ls -la "$ID.tar.age"
 
       - uses: actions/upload-artifact@v7

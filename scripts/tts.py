@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,9 @@ import soundfile as sf
 from kokoro import KPipeline
 
 ROOT = Path(__file__).resolve().parent.parent
+# Optional overrides for a tighter edit: TTS_SPEED_SCALE multiplies every voice speed, TTS_GAP replaces the pause between lines.
+SPEED_SCALE = float(os.environ.get("TTS_SPEED_SCALE", "1"))
+GAP_OVERRIDE = os.environ.get("TTS_GAP")
 SAMPLE_RATE = 24000
 
 _pipelines = {}
@@ -47,7 +51,8 @@ def render_episode(episode_dir, voices):
     lines_dir = out_dir / "lines"
     lines_dir.mkdir(parents=True, exist_ok=True)
 
-    gap = np.zeros(int(script.get("gap_seconds", 0.25) * SAMPLE_RATE), dtype=np.float32)
+    gap_s = float(GAP_OVERRIDE) if GAP_OVERRIDE else script.get("gap_seconds", 0.25)
+    gap = np.zeros(int(gap_s * SAMPLE_RATE), dtype=np.float32)
     parts, timeline, cursor = [], [], 0.0
 
     for i, line in enumerate(script["lines"], start=1):
@@ -55,7 +60,7 @@ def render_episode(episode_dir, voices):
         if speaker not in voices:
             raise SystemExit(f"{episode_dir.name}: no voice set for '{speaker}' in voices.json")
         cfg = voices[speaker]
-        audio = synthesize(line["text"], cfg["voice"], cfg.get("speed", 1.0))
+        audio = synthesize(line["text"], cfg["voice"], cfg.get("speed", 1.0) * SPEED_SCALE)
 
         wav_name = f"{i:02d}-{speaker}.wav"
         sf.write(lines_dir / wav_name, audio, SAMPLE_RATE)
