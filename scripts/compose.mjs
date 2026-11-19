@@ -11,6 +11,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCards, graphicsHtml } from "./cards.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HF_VERSION = "0.9.5";
@@ -118,6 +119,15 @@ function groupsFor(line, li) {
 }
 const capGroups = lines.flatMap(groupsFor);
 
+// Key words keep the speaker's colour in captions: numbers, names mid-sentence, and words from the title.
+const STOP = new Set("the a an and or but of to in on at for with is are was were be it this that you your how why what does do can".split(" "));
+const titleWords = new Set((script.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)));
+for (const g of capGroups) g.words.forEach((w, i) => {
+  const bare = w.text.replace(/[^A-Za-z0-9']/g, "");
+  const firstOfLine = lines.some((l) => l.start === g.start && i === 0);
+  w.key = /\d/.test(bare) || (!firstOfLine && i > 0 && /^[A-Z][a-z]/.test(bare)) || titleWords.has(bare.toLowerCase());
+});
+
 /* ---------- Character expressions ---------- */
 
 const kikoLines = lines.filter((l) => l.speaker === "kiko");
@@ -152,6 +162,10 @@ const stage = `<template>
     .plate { position: absolute; left: 0; top: 300px; width: ${W}px; text-align: center; }
     .plate-name { font: 900 120px "Inter", sans-serif; color: #fff; line-height: 1; }
     .plate-role { font: 400 42px "Inter", sans-serif; color: rgba(255,255,255,.72); margin-top: 18px; }
+    ${duo ? `.plate { top: 692px; left: 120px; width: 840px; text-align: left; }
+    .plate-name { display: inline; font-size: 50px; }
+    .plate-role { display: inline; font-size: 28px; margin-left: 14px; }
+    #floor { top: 1172px; }` : ""}
     .char { position: absolute; left: ${duo ? 0 : 240}px; top: ${duo ? 0 : 450}px; width: 600px; height: 720px; opacity: 0; }
   </style>
   <div id="root" data-composition-id="stage" data-width="${W}" data-height="${H}">
@@ -181,8 +195,8 @@ ${readFileSync(join(ROOT, "characters/rig.js"), "utf8").replace(/<\/script/gi, "
       const tl = gsap.timeline({ paused: true });
 
       // Two-shot: speaker at MAIN, listener at SIDE; they trade places when the speaker changes.
-      const MAIN = { x: 60, y: 450, scale: 1, opacity: 1, zIndex: 3 };
-      const SIDE = { x: 650, y: 732, scale: 0.6, opacity: 0.82, zIndex: 2 };
+      const MAIN = { x: 110, y: 740, scale: 0.66, opacity: 1, zIndex: 3 };
+      const SIDE = { x: 640, y: 932, scale: 0.38, opacity: 0.85, zIndex: 2 };
       if (DUO) {
         const cast = Object.keys(ACCENT);
         cast.forEach((who) => tl.set(root.querySelector("#char-" + who), { transformOrigin: "0% 0%", ...(who === SLOTS[0].speaker ? MAIN : SIDE) }, 0));
@@ -244,11 +258,11 @@ const captions = `<template>
     .cap { position: absolute; left: 0; top: 1236px; width: ${W}px; text-align: center; overflow: visible; }
     .cap-inner { display: inline-block; font: 900 76px "Inter", sans-serif; text-transform: uppercase; color: #fff;
       line-height: 1.05; text-shadow: 0 6px 0 rgba(0,0,0,.45), 0 0 24px rgba(0,0,0,.35); }
-    .w { display: inline-block; margin: 0 .12em; }
+    .w { display: inline-block; margin: 0 .12em; opacity: .5; }
   </style>
   <div id="root" data-composition-id="captions" data-width="${W}" data-height="${H}">
 ${capGroups.map((g, i) => `    <div id="cap-${i + 1}" class="cap clip" data-start="${g.start}" data-duration="${r2(g.end - g.start)}" data-track-index="1" data-speaker="${g.speaker}">
-      <span class="cap-inner">${g.words.map((w, j) => `<span class="w" id="cap-${i + 1}-w${j + 1}" data-t="${r2(w.start)}">${esc(w.text)}</span>`).join("")}</span>
+      <span class="cap-inner">${g.words.map((w, j) => `<span class="w${w.key ? " key" : ""}" id="cap-${i + 1}-w${j + 1}" data-t="${r2(w.start)}"${w.key ? ` style="color:${CAST[g.speaker].accent}"` : ""}>${esc(w.text)}</span>`).join("")}</span>
     </div>`).join("\n")}
   </div>
   <script>
@@ -266,8 +280,8 @@ ${capGroups.map((g, i) => `    <div id="cap-${i + 1}" class="cap clip" data-star
         tl.set(inner, { opacity: 0, scale: 0.9, visibility: "visible" }, start);
         tl.to(inner, { opacity: 1, scale: 1, duration: 0.14, ease: "back.out(2)" }, start);
         cap.querySelectorAll(".w").forEach((w) => {
-          tl.set(w, { color: ACCENT[cap.dataset.speaker] }, parseFloat(w.dataset.t));
-          tl.set(w, { color: "#ffffff" }, Math.min(end - 0.01, parseFloat(w.dataset.t) + 0.45));
+          tl.set(w, { opacity: 0.5 }, start);
+          tl.set(w, { opacity: 1 }, parseFloat(w.dataset.t));
         });
         tl.to(inner, { opacity: 0, duration: 0.1, ease: "power2.in" }, end - 0.1);
         tl.set(inner, { opacity: 0, visibility: "hidden" }, end);
@@ -294,7 +308,9 @@ const index = `<!doctype html>
     <div id="root" data-composition-id="main" data-start="0" data-duration="${total}" data-width="${W}" data-height="${H}">
       <div id="stage" data-composition-id="stage" data-composition-src="compositions/stage.html"
         data-start="0" data-duration="${total}" data-track-index="1" data-track-kind="graphics" data-width="${W}" data-height="${H}"></div>
-      <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html"
+${duo ? `      <div id="graphics" data-composition-id="graphics" data-composition-src="compositions/graphics.html"
+        data-start="0" data-duration="${total}" data-track-index="4" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index: 1"></div>
+` : ""}      <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html"
         data-start="0" data-duration="${total}" data-track-index="2" data-track-kind="captions" data-width="${W}" data-height="${H}" style="z-index: 2"></div>
       <audio id="voice" src="assets/dialogue.wav" data-start="0" data-duration="${existsSync(join(ROOT, `out/${ep}/mix.wav`)) ? total : r2(timeline.duration)}" data-track-index="3" data-volume="1"></audio>
     </div>
@@ -311,6 +327,7 @@ mkdirSync(join(dir, "assets"), { recursive: true });
 writeFileSync(join(dir, "index.html"), index);
 writeFileSync(join(dir, "compositions/stage.html"), stage);
 writeFileSync(join(dir, "compositions/captions.html"), captions);
+if (duo) writeFileSync(join(dir, "compositions/graphics.html"), graphicsHtml(buildCards(script, lines, total), total, CAST[script.host]?.accent || CAST.kiko.accent, W, H));
 // Prefer the finished soundtrack (voice + music + sound effects) from scripts/soundtrack.py.
 const mixed = existsSync(join(ROOT, `out/${ep}/mix.wav`));
 copyFileSync(join(ROOT, `out/${ep}/${mixed ? "mix" : "dialogue"}.wav`), join(dir, "assets/dialogue.wav"));
